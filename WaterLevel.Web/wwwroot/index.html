@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Уровень воды</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f5f7fb;
+            --panel: #ffffff;
+            --line: #0f766e;
+            --grid: rgba(15, 23, 42, 0.08);
+            --text: #0f172a;
+            --muted: #475569;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Segoe UI", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(14, 165, 233, 0.16), transparent 28%),
+                linear-gradient(180deg, #eef6ff 0%, var(--bg) 100%);
+            color: var(--text);
+        }
+
+        .page {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 32px 20px 40px;
+        }
+
+        .hero {
+            margin-bottom: 24px;
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: clamp(30px, 4vw, 44px);
+        }
+
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            max-width: 720px;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.86);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 24px;
+            padding: 20px;
+            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            padding: 18px;
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(241,245,249,0.9));
+            border: 1px solid rgba(148, 163, 184, 0.18);
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .chart-wrap {
+            position: relative;
+            min-height: 420px;
+        }
+
+        .status {
+            margin-top: 14px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        button {
+            appearance: none;
+            border: 0;
+            border-radius: 12px;
+            padding: 10px 14px;
+            background: #0f766e;
+            color: #fff;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="hero">
+            <h1>Уровень воды: Киров</h1>
+            <p class="subtitle">Станция 76556. Данные обновляются из внешнего источника раз в час и сохраняются в PostgreSQL только при появлении новой метки времени.</p>
+        </section>
+
+        <section class="panel">
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-label">Последний уровень</div>
+                    <div class="stat-value" id="latestLevel">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Время наблюдения</div>
+                    <div class="stat-value" id="latestTime">--</div>
+                </div>
+            </div>
+
+            <div class="toolbar">
+                <strong>История измерений</strong>
+                <button id="refreshButton" type="button">Обновить</button>
+            </div>
+
+            <div class="chart-wrap">
+                <canvas id="historyChart"></canvas>
+            </div>
+
+            <div class="status" id="status">Загрузка...</div>
+        </section>
+    </main>
+
+    <script>
+        const latestLevel = document.getElementById("latestLevel");
+        const latestTime = document.getElementById("latestTime");
+        const statusNode = document.getElementById("status");
+        const refreshButton = document.getElementById("refreshButton");
+
+        const chart = new Chart(document.getElementById("historyChart"), {
+            type: "line",
+            data: {
+                labels: [],
+                datasets: [{
+                    label: "Уровень воды",
+                    data: [],
+                    borderColor: "#0f766e",
+                    backgroundColor: "rgba(15, 118, 110, 0.12)",
+                    fill: true,
+                    borderWidth: 3,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    tension: 0.25
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: "index",
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            color: "rgba(15, 23, 42, 0.06)"
+                        }
+                    },
+                    y: {
+                        grid: {
+                            color: "rgba(15, 23, 42, 0.08)"
+                        }
+                    }
+                }
+            }
+        });
+
+        async function loadData() {
+            statusNode.textContent = "Загрузка данных...";
+
+            const [latestResponse, historyResponse] = await Promise.all([
+                fetch("/api/water-level/latest"),
+                fetch("/api/water-level/history")
+            ]);
+
+            if (!historyResponse.ok) {
+                throw new Error("Не удалось загрузить историю");
+            }
+
+            const history = await historyResponse.json();
+            const latest = latestResponse.ok ? await latestResponse.json() : null;
+
+            chart.data.labels = history.map(item =>
+                new Date(item.observedAt).toLocaleString("ru-RU", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit"
+                })
+            );
+            chart.data.datasets[0].data = history.map(item => item.level);
+            chart.update();
+
+            if (latest) {
+                latestLevel.textContent = `${latest.level} см`;
+                latestTime.textContent = new Date(latest.observedAt).toLocaleString("ru-RU");
+            } else {
+                latestLevel.textContent = "--";
+                latestTime.textContent = "--";
+            }
+
+            statusNode.textContent = history.length
+                ? `Записей в истории: ${history.length}`
+                : "В базе пока нет данных.";
+        }
+
+        refreshButton.addEventListener("click", async () => {
+            refreshButton.disabled = true;
+            try {
+                await fetch("/api/water-level/collect", { method: "POST" });
+                await loadData();
+            } catch (error) {
+                statusNode.textContent = error.message;
+            } finally {
+                refreshButton.disabled = false;
+            }
+        });
+
+        loadData().catch(error => {
+            statusNode.textContent = error.message;
+        });
+    </script>
+</body>
+</html>

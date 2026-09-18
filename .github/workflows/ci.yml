@@ -1,0 +1,70 @@
+name: CI
+
+# Запускаем на каждый PR в main и на коммиты, попавшие в main.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Минимально необходимые права: воркфлоу только читает код.
+# Ничего не комментирует в PR, не пишет в репозиторий, не публикует пакеты.
+permissions:
+  contents: read
+
+# Если в ветку прилетел новый коммит — старый прогон отменяем.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Сборка и проверки
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Установить .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          # Версия берётся из global.json — одна и та же локально и в CI.
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: WaterLevel.Web/packages.lock.json
+
+      - name: Восстановить зависимости
+        # --locked-mode: упасть, если packages.lock.json не совпадает с csproj.
+        # Любое изменение зависимостей обязано приехать в PR явным диффом.
+        run: dotnet restore WaterLevel.sln --locked-mode
+
+      - name: Проверить форматирование
+        run: dotnet format WaterLevel.sln --verify-no-changes --no-restore
+
+      - name: Собрать проект
+        # -warnaserror: предупреждения компилятора валят сборку.
+        # Сейчас их 0, и это стоит удерживать.
+        run: dotnet build WaterLevel.sln -c Release --no-restore -warnaserror
+
+      # ШАГА С ТЕСТАМИ ЗДЕСЬ НЕТ НАМЕРЕННО.
+      # В репозитории нет ни одного тестового проекта, поэтому `dotnet test`
+      # прошёл бы вхолостую и создавал ложное ощущение покрытия.
+      # Когда появится проект вида WaterLevel.Tests, добавьте сюда шаг:
+      #
+      #   - name: Тесты
+      #     run: dotnet test WaterLevel.sln -c Release --no-build
+
+  docker:
+    name: Сборка Docker-образа
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Собрать образ
+        # Только сборка, без публикации куда-либо: проверяем, что артефакт
+        # деплоя вообще собирается. Контекст сборки — WaterLevel.Web,
+        # так же как в docker-compose.yml.
+        run: docker build -f WaterLevel.Web/Dockerfile -t waterlevel-web:ci WaterLevel.Web

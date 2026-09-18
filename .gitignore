@@ -1,0 +1,21 @@
+## Артефакты сборки .NET
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+
+## Каталоги IDE
+.vs/
+.vscode/
+.idea/
+
+## Локальные настройки и секреты
+appsettings.*.local.json
+*.env
+.env
+.env.*
+
+## Прочее
+*.log

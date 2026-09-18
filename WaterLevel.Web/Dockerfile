@@ -1,8 +1,8 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-COPY ["WaterLevel.Web.csproj", "./"]
-RUN dotnet restore "WaterLevel.Web.csproj"
+COPY ["WaterLevel.Web.csproj", "packages.lock.json", "./"]
+RUN dotnet restore "WaterLevel.Web.csproj" --locked-mode
 
 COPY . .
 RUN dotnet publish "WaterLevel.Web.csproj" -c Release -o /app/publish /p:UseAppHost=false

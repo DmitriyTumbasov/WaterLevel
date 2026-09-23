@@ -32,7 +32,7 @@ jobs:
           # Версия берётся из global.json — одна и та же локально и в CI.
           global-json-file: global.json
           cache: true
-          cache-dependency-path: WaterLevel.Web/packages.lock.json
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Восстановить зависимости
         # --locked-mode: упасть, если packages.lock.json не совпадает с csproj.
@@ -47,13 +47,9 @@ jobs:
         # Сейчас их 0, и это стоит удерживать.
         run: dotnet build WaterLevel.sln -c Release --no-restore -warnaserror
 
-      # ШАГА С ТЕСТАМИ ЗДЕСЬ НЕТ НАМЕРЕННО.
-      # В репозитории нет ни одного тестового проекта, поэтому `dotnet test`
-      # прошёл бы вхолостую и создавал ложное ощущение покрытия.
-      # Когда появится проект вида WaterLevel.Tests, добавьте сюда шаг:
-      #
-      #   - name: Тесты
-      #     run: dotnet test WaterLevel.sln -c Release --no-build
+      - name: Тесты
+        # --no-build: используем то, что собрали шагом выше, а не пересобираем.
+        run: dotnet test WaterLevel.sln -c Release --no-build --logger "console;verbosity=normal"
 
   docker:
     name: Сборка Docker-образа

@@ -1,0 +1,45 @@
+# Compose-файл для сервера. В отличие от корневого docker-compose.yml
+# ничего не собирает — тянет готовый образ из GHCR по неизменяемому тегу.
+#
+# Значения подставляются из файла .env, который доставляет workflow деплоя:
+#   APP_IMAGE                 полное имя образа с тегом
+#   APP_PORT                  внешний порт (staging 8081, прод 8080)
+#   POSTGRES_PASSWORD         пароль базы этого окружения
+#   COLLECT_INTERVAL_MINUTES  как часто опрашивать источник
+
+services:
+  web:
+    image: ${APP_IMAGE}
+    ports:
+      - "${APP_PORT}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=waterlevel;Username=waterlevel;Password=${POSTGRES_PASSWORD}
+      Collector__SourceUrl: https://pogoda43.ru/wp-content/themes/kcgms/framework/gidromet/get_cur_water.php?tp=water_level
+      Collector__StationId: "76556"
+      Collector__IntervalMinutes: ${COLLECT_INTERVAL_MINUTES}
+    depends_on:
+      postgres:
+        # Приложение создаёт схему при старте и без базы падает,
+        # поэтому ждём готовности, а не просто запуска контейнера.
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: waterlevel
+      POSTGRES_USER: waterlevel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    # Порт наружу не выставляем: база доступна только внутри сети compose.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U waterlevel -d waterlevel"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

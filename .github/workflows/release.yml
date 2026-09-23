@@ -1,0 +1,85 @@
+name: Release
+
+# Каждый коммит, попавший в main, даёт образ в реестре.
+# В main попасть можно только через PR с зелёным CI, поэтому отдельная
+# пересборка проверок здесь не нужна.
+on:
+  push:
+    branches: [main]
+  # Ручной запуск — если образ нужно пересобрать, не делая новый коммит.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Право писать в GitHub Container Registry. Больше ничего не требуется:
+  # секреты реестра не нужны, GITHUB_TOKEN выдаётся самим Actions.
+  packages: write
+
+# Релизы не отменяем на полпути: прерванная публикация оставит
+# реестр в непонятном состоянии.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Публикация образа
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Вычислить имя образа
+        id: image
+        # GHCR принимает только строчные буквы, а владелец репозитория
+        # записан смешанным регистром.
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          name="ghcr.io/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/waterlevel"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "Образ: $name"
+
+      - name: Войти в реестр
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Собрать образ
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          SHA: ${{ github.sha }}
+        # Два тега на один образ:
+        #   <sha>  — неизменяемый, именно он указывается при выкате и откате;
+        #   latest — подвижный, только для ручных проверок.
+        run: |
+          docker build \
+            -f WaterLevel.Web/Dockerfile \
+            -t "$IMAGE:$SHA" \
+            -t "$IMAGE:latest" \
+            WaterLevel.Web
+
+      - name: Опубликовать образ
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker push "$IMAGE:$SHA"
+          docker push "$IMAGE:latest"
+
+      - name: Показать, что выкатывать
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          SHA: ${{ github.sha }}
+        run: |
+          {
+            echo "### Образ опубликован"
+            echo
+            echo '```'
+            echo "$IMAGE:$SHA"
+            echo '```'
+            echo
+            echo "Этот тег указывается при выкате и при откате."
+          } >> "$GITHUB_STEP_SUMMARY"

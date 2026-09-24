@@ -14,13 +14,30 @@ set -euo pipefail
 : "${PROJECT:?не задан PROJECT}"
 : "${APP_PORT:?не задан APP_PORT}"
 
-if ! command -v curl >/dev/null 2>&1; then
-  echo "На сервере нет curl — smoke-тест выполнить нечем." >&2
-  echo "Установите: sudo apt-get install -y curl" >&2
-  exit 1
-fi
-
 cd "$DEPLOY_DIR"
+
+# Код ответа /health без внешних утилит.
+#
+# Сначала пробуем curl, а если его нет — обходимся самим bash: он умеет
+# открывать TCP-соединение через /dev/tcp. Зависеть от набора утилит
+# на сервере не хочется: curl легко оказывается snap-пакетом, а /snap/bin
+# отсутствует в PATH неинтерактивной SSH-сессии, в которой идёт выкат.
+http_status() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}/health"
+    return
+  fi
+
+  local status_line
+  exec 3<>"/dev/tcp/127.0.0.1/${APP_PORT}" || return 1
+  printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+  IFS= read -r status_line <&3 || { exec 3<&- 3>&-; return 1; }
+  exec 3<&- 3>&-
+
+  # Строка вида "HTTP/1.1 200 OK" — нужен второй элемент.
+  set -- $status_line
+  printf '%s' "${2:-}"
+}
 
 compose() {
   docker compose -p "$PROJECT" "$@"
@@ -34,7 +51,7 @@ compose up -d --remove-orphans
 
 echo "==> Smoke-тест: ждём ответ /health"
 for attempt in $(seq 1 30); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${APP_PORT}/health" || true)
+  code=$(http_status || true)
 
   if [ "$code" = "200" ]; then
     echo "OK: /health ответил 200 с попытки ${attempt}"

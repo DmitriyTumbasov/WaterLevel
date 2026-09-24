@@ -114,6 +114,11 @@ jobs:
           COLLECT_INTERVAL_MINUTES=${COLLECT_INTERVAL_MINUTES}
           EOF
 
+          # Каталог создаём сами: выкат не должен зависеть от того,
+          # выполнил ли кто-то однажды mkdir вручную.
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" "$USER_NAME@$HOST" \
+            "mkdir -p '$DEPLOY_DIR'"
+
           scp -i ~/.ssh/id_deploy -P "$SSH_PORT" \
             deploy/docker-compose.yml "$USER_NAME@$HOST:$DEPLOY_DIR/docker-compose.yml"
           scp -i ~/.ssh/id_deploy -P "$SSH_PORT" \

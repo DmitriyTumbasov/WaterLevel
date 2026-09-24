@@ -39,8 +39,21 @@ http_status() {
   printf '%s' "${2:-}"
 }
 
+COMPOSE_FILE_PATH="$DEPLOY_DIR/docker-compose.yml"
+
+echo "==> Каталог выката: $(pwd), пользователь $(id -un)"
+ls -la "$DEPLOY_DIR"
+
+if [ ! -f "$COMPOSE_FILE_PATH" ]; then
+  echo "ОШИБКА: нет compose-файла $COMPOSE_FILE_PATH" >&2
+  echo "Он должен приезжать шагом доставки конфигурации." >&2
+  exit 1
+fi
+
+# Путь к файлу задаётся явно, а не ищется по текущему каталогу:
+# так поведение не зависит от того, из какого каталога запущен скрипт.
 compose() {
-  docker compose -p "$PROJECT" "$@"
+  docker compose -p "$PROJECT" -f "$COMPOSE_FILE_PATH" --project-directory "$DEPLOY_DIR" "$@"
 }
 
 echo "==> Тянем образ из реестра"

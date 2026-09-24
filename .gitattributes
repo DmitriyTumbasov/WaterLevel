@@ -1,0 +1,10 @@
+# По умолчанию git сам решает, что текст, и нормализует переводы строк.
+* text=auto
+
+# Скрипты выполняются на Linux-сервере и в CI: CRLF внутри них ломает
+# запуск с ошибкой вида "bad interpreter". Держим LF независимо от того,
+# на какой системе правили файл.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf

@@ -33,6 +33,18 @@ public sealed class WaterLevelRepository(IConfiguration configuration)
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Проверяет, что база отвечает. Бросает исключение, если нет.
+    /// Используется эндпоинтом /health при выкате.
+    /// </summary>
+    public async Task CheckConnectionAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("select 1;", connection);
+        await command.ExecuteScalarAsync(cancellationToken);
+    }
+
     public async Task<bool> InsertIfNewerAsync(WaterLevelMeasurement measurement, CancellationToken cancellationToken)
     {
         var latestObservedAt = await GetLatestObservedAtAsync(measurement.StationId, cancellationToken);

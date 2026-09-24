@@ -1,3 +1,4 @@
+using Npgsql;
 using WaterLevel.Web.Models;
 using WaterLevel.Web.Options;
 using WaterLevel.Web.Services;
@@ -18,6 +19,26 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 await app.Services.GetRequiredService<WaterLevelRepository>().EnsureDatabaseAsync();
+
+// Живость сервиса для smoke-теста при выкате.
+// Проверяет и себя, и доступность базы: без базы приложение бесполезно,
+// поэтому «поднялся, но не видит базу» — это не успешный выкат.
+app.MapGet("/health", async (
+    WaterLevelRepository repository,
+    ILoggerFactory loggerFactory,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await repository.CheckConnectionAsync(cancellationToken);
+        return Results.Ok(new { status = "ok" });
+    }
+    catch (NpgsqlException ex)
+    {
+        loggerFactory.CreateLogger("Health").LogError(ex, "Health check failed: database is unavailable.");
+        return Results.Json(new { status = "database unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
 
 app.MapGet("/api/water-level/latest", async (WaterLevelRepository repository, CancellationToken cancellationToken) =>
 {

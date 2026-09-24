@@ -1,0 +1,126 @@
+name: Deploy staging
+
+on:
+  # Автоматически после успешной публикации образа.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  # Вручную — чтобы выкатить конкретный тег, в том числе прошлый.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: SHA-тег образа. Пусто — текущая вершина main.
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# Два выката одновременно затрут друг друга.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Выкат на staging
+    # Автозапуск — только после успешного релиза. Ручной запуск проходит всегда.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    # Пароль базы берётся из секретов этого окружения, а не репозитория.
+    environment: staging
+
+    env:
+      APP_PORT: 8081
+      COLLECT_INTERVAL_MINUTES: 360
+      PROJECT: waterlevel-staging
+      DEPLOY_DIR: /opt/waterlevel/staging
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Определить образ
+        id: image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: |
+          tag="${INPUT_TAG:-${RUN_SHA:-$FALLBACK_SHA}}"
+          if [ -z "$tag" ]; then
+            echo "Не удалось определить тег образа" >&2
+            exit 1
+          fi
+
+          name="ghcr.io/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/waterlevel:$tag"
+          echo "ref=$name" >> "$GITHUB_OUTPUT"
+          echo "Выкатываем: $name"
+
+      - name: Подготовить SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_deploy
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Доставить конфигурацию на сервер
+        env:
+          HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          USER_NAME: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
+          APP_IMAGE: ${{ steps.image.outputs.ref }}
+          PG_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          # Пароль едет файлом, а не аргументом команды: аргументы видны
+          # в списке процессов на сервере, содержимое .env — нет.
+          umask 077
+          cat > env.deploy <<EOF
+          APP_IMAGE=${APP_IMAGE}
+          APP_PORT=${APP_PORT}
+          POSTGRES_PASSWORD=${PG_PASSWORD}
+          COLLECT_INTERVAL_MINUTES=${COLLECT_INTERVAL_MINUTES}
+          EOF
+
+          scp -i ~/.ssh/id_deploy -P "$SSH_PORT" \
+            deploy/docker-compose.yml "$USER_NAME@$HOST:$DEPLOY_DIR/docker-compose.yml"
+          scp -i ~/.ssh/id_deploy -P "$SSH_PORT" \
+            env.deploy "$USER_NAME@$HOST:$DEPLOY_DIR/.env"
+
+          rm -f env.deploy
+
+      - name: Выкатить и проверить живость
+        env:
+          HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          USER_NAME: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" "$USER_NAME@$HOST" \
+            "chmod 600 '$DEPLOY_DIR/.env' && DEPLOY_DIR='$DEPLOY_DIR' PROJECT='$PROJECT' APP_PORT='$APP_PORT' bash -s" \
+            < deploy/remote-deploy.sh
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
+
+      - name: Записать итог
+        if: success()
+        env:
+          APP_IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          {
+            echo "### Staging обновлён"
+            echo
+            echo "Образ:"
+            echo '```'
+            echo "$APP_IMAGE"
+            echo '```'
+            echo
+            echo "Откат: запустите этот workflow вручную, указав прошлый SHA-тег."
+          } >> "$GITHUB_STEP_SUMMARY"

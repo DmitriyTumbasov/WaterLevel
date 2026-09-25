@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Npgsql;
 using WaterLevel.Web.Models;
 using WaterLevel.Web.Options;
@@ -8,7 +9,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<CollectorOptions>(
     builder.Configuration.GetSection(CollectorOptions.SectionName));
 
-builder.Services.AddHttpClient<WaterLevelApiClient>();
+builder.Services.AddHttpClient<WaterLevelApiClient>((serviceProvider, client) =>
+{
+    var options = serviceProvider.GetRequiredService<IOptions<CollectorOptions>>().Value;
+    client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
+});
 builder.Services.AddSingleton<WaterLevelRepository>();
 builder.Services.AddSingleton<WaterLevelCollectorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WaterLevelCollectorService>());
@@ -58,10 +63,23 @@ app.MapGet("/api/water-level/history", async (
 
 app.MapPost("/api/water-level/collect", async (
     WaterLevelCollectorService collector,
+    ILoggerFactory loggerFactory,
     CancellationToken cancellationToken) =>
 {
-    var inserted = await collector.CollectOnceAsync(cancellationToken);
-    return Results.Ok(new { inserted });
+    try
+    {
+        var inserted = await collector.CollectOnceAsync(cancellationToken);
+        return Results.Ok(new { inserted });
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+    {
+        // Фоновый сборщик такие ошибки ловит и просто пишет в лог.
+        // Эндпоинт до сих пор отдавал 500 со стектрейсом — отвечаем внятно.
+        loggerFactory.CreateLogger("Collect").LogError(ex, "Manual collection failed.");
+        return Results.Problem(
+            "Источник данных недоступен.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
 });
 
 app.Run();

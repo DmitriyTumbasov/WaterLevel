@@ -55,7 +55,7 @@ WaterLevel.sln
 | GET | `/health` | Живость сервиса и доступность базы. `200` — норма, `503` — база недоступна |
 | GET | `/api/water-level/latest` | Последнее измерение, `404` если записей нет |
 | GET | `/api/water-level/history?from=&to=` | История точек, обе границы необязательны |
-| POST | `/api/water-level/collect` | Немедленный опрос источника, отвечает `{ "inserted": bool }` |
+| POST | `/api/water-level/collect` | Немедленный опрос источника: `{ "inserted": bool }`, либо `502`, если источник недоступен |
 
 ## Команды
 

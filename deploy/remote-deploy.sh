@@ -59,27 +59,75 @@ compose() {
 echo "==> Тянем образ из реестра"
 compose pull
 
+# Ждём, пока /health ответит 200. Возвращает 0 при успехе.
+wait_for_health() {
+  local attempts="$1" attempt code
+
+  for attempt in $(seq 1 "$attempts"); do
+    code=$(http_status || true)
+
+    if [ "$code" = "200" ]; then
+      echo "OK: /health ответил 200 с попытки ${attempt}"
+      return 0
+    fi
+
+    echo "попытка ${attempt}: код ${code:-нет ответа}"
+    sleep 5
+  done
+
+  return 1
+}
+
+# Образ, который работает прямо сейчас, — цель отката.
+# При самом первом выкате его нет, и откатываться будет некуда: это нормально.
+previous_image=""
+if running_id=$(compose ps -q web 2>/dev/null) && [ -n "$running_id" ]; then
+  previous_image=$(docker inspect --format '{{.Config.Image}}' "$running_id" 2>/dev/null || true)
+fi
+
+target_image=$(grep -E '^APP_IMAGE=' "$DEPLOY_DIR/.env" | cut -d= -f2- || true)
+
+if [ -n "$previous_image" ]; then
+  echo "==> Сейчас работает: $previous_image"
+else
+  echo "==> Работающего контейнера нет, это первый выкат"
+fi
+
 echo "==> Поднимаем сервисы"
 compose up -d --remove-orphans
 
 echo "==> Smoke-тест: ждём ответ /health"
-for attempt in $(seq 1 30); do
-  code=$(http_status || true)
-
-  if [ "$code" = "200" ]; then
-    echo "OK: /health ответил 200 с попытки ${attempt}"
-    # Старые образы копятся с каждым выкатом и забивают диск.
-    docker image prune -f >/dev/null 2>&1 || true
-    exit 0
-  fi
-
-  echo "попытка ${attempt}: код ${code:-нет ответа}"
-  sleep 5
-done
+if wait_for_health 30; then
+  # Старые образы копятся с каждым выкатом и забивают диск.
+  docker image prune -f >/dev/null 2>&1 || true
+  exit 0
+fi
 
 echo "ОШИБКА: /health не ответил 200 за 150 секунд" >&2
 echo "--- состояние контейнеров ---" >&2
 compose ps >&2
 echo "--- последние строки лога приложения ---" >&2
 compose logs --tail 80 web >&2
+
+if [ "${ROLLBACK_ON_FAILURE:-false}" != "true" ]; then
+  exit 1
+fi
+
+if [ -z "$previous_image" ] || [ "$previous_image" = "$target_image" ]; then
+  echo "Откатываться некуда: предыдущий образ неизвестен или совпадает с новым." >&2
+  exit 1
+fi
+
+echo "==> ОТКАТ на $previous_image" >&2
+# Переменная окружения имеет приоритет над .env, поэтому подмена образа
+# не требует переписывать файл на сервере.
+APP_IMAGE="$previous_image" compose up -d --remove-orphans
+
+echo "==> Проверяем живость после отката" >&2
+if wait_for_health 24; then
+  echo "Откат удался: сервис работает на прежнем образе. Выкат считается неуспешным." >&2
+else
+  echo "ОТКАТ НЕ ПОМОГ: сервис не отвечает и на прежнем образе. Нужно вмешательство." >&2
+fi
+
 exit 1
